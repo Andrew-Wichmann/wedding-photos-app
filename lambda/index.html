@@ -150,7 +150,7 @@
 
         <div class="tabs">
             <button class="tab active" data-tab="upload">Upload</button>
-            <button class="tab" data-tab="browse">Browse</button>
+            <button class="tab" data-tab="gallery">Gallery</button>
         </div>
 
         <div class="tab-content active" id="uploadTab">
@@ -179,7 +179,7 @@
             <div id="status"></div>
         </div>
 
-        <div class="tab-content" id="browseTab">
+        <div class="tab-content" id="galleryTab">
             <div class="swiper" id="gallerySwiper">
                 <div class="swiper-wrapper" id="gallerySwiperWrapper">
                     <!-- Gallery photos will be loaded here -->
@@ -219,8 +219,8 @@
                 document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
                 document.getElementById(targetTab + 'Tab').classList.add('active');
 
-                // Load gallery when Browse tab is clicked
-                if (targetTab === 'browse' && !gallerySwiperInstance) {
+                // Load gallery when Gallery tab is clicked
+                if (targetTab === 'gallery' && !gallerySwiperInstance) {
                     loadGallery();
                 }
             });
@@ -346,6 +346,7 @@
                     crossFade: true
                 },
                 grabCursor: true,
+                touchEventsTarget: 'container',
                 virtual: {
                     enabled: true,
                     slides: items,
@@ -353,7 +354,7 @@
                         const isVideo = item.key.match(/\.(mp4|webm|mov)$/i);
                         if (isVideo) {
                             return `<div class="swiper-slide" data-swiper-slide-index="${index}">
-                                <video controls playsinline loading="lazy">
+                                <video controls playsinline loading="lazy" webkit-playsinline style="pointer-events: auto;">
                                     <source src="${item.url}" type="video/mp4">
                                 </video>
                             </div>`;

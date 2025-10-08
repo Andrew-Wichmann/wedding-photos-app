@@ -174,10 +174,6 @@ resource "aws_cloudfront_distribution" "wedding" {
     viewer_protocol_policy        = "redirect-to-https"
     origin_request_policy_id      = aws_cloudfront_origin_request_policy.lambda_function_url.id
     cache_policy_id               = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
-
-    min_ttl     = 0
-    default_ttl = 3600  # 1 hour for GET requests  
-    max_ttl     = 86400 # 24 hours max
   }
 
   restrictions {
