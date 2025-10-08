@@ -57,9 +57,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda_role.name
 }
 
-# S3 permissions for Lambda
+# S3 and DynamoDB permissions for Lambda
 resource "aws_iam_role_policy" "lambda_s3_policy" {
-  name = "lambda-s3-policy"
+  name = "lambda-s3-dynamodb-policy"
   role = aws_iam_role.lambda_role.id
 
   policy = jsonencode({
@@ -80,26 +80,165 @@ resource "aws_iam_role_policy" "lambda_s3_policy" {
           "s3:ListBucket"
         ]
         Resource = aws_s3_bucket.photos.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:Scan",
+          "dynamodb:Query",
+          "dynamodb:GetItem"
+        ]
+        Resource = [
+          aws_dynamodb_table.photo_metadata.arn,
+          "${aws_dynamodb_table.photo_metadata.arn}/index/*"
+        ]
       }
     ]
   })
 }
 
-# Lambda function
+# DynamoDB table for photo metadata
+resource "aws_dynamodb_table" "photo_metadata" {
+  name           = "wedding-photo-metadata"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "photoId"
+  range_key      = "uploadedAt"
+
+  attribute {
+    name = "photoId"
+    type = "S"
+  }
+
+  attribute {
+    name = "uploadedAt"
+    type = "N"
+  }
+
+  attribute {
+    name = "dateTaken"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "DateTakenIndex"
+    hash_key        = "dateTaken"
+    range_key       = "uploadedAt"
+    projection_type = "ALL"
+  }
+}
+
+# Lambda function - Main App
 resource "aws_lambda_function" "wedding_app" {
-  filename         = "../lambda/main.zip"
+  filename         = "../lambda-app/main.zip"
   function_name    = "wedding-photos-app"
   role            = aws_iam_role.lambda_role.arn
-  handler         = "main"
-  runtime         = "go1.x"
-  
-  source_code_hash = filebase64sha256("../lambda/main.zip")
+  handler         = "bootstrap"
+  runtime         = "provided.al2023"
+
+  source_code_hash = filebase64sha256("../lambda-app/main.zip")
 
   environment {
     variables = {
       S3_BUCKET = aws_s3_bucket.photos.bucket
     }
   }
+}
+
+# IAM role for metadata extraction Lambda
+resource "aws_iam_role" "metadata_lambda_role" {
+  name = "wedding-metadata-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "metadata_lambda_basic" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  role       = aws_iam_role.metadata_lambda_role.name
+}
+
+resource "aws_iam_role_policy" "metadata_lambda_policy" {
+  name = "metadata-lambda-policy"
+  role = aws_iam_role.metadata_lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "${aws_s3_bucket.photos.arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = aws_dynamodb_table.photo_metadata.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "rekognition:IndexFaces",
+          "rekognition:SearchFacesByImage"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Lambda function - Metadata Extraction
+resource "aws_lambda_function" "metadata_extractor" {
+  filename         = "../lambda-metadata/main.zip"
+  function_name    = "wedding-metadata-extractor"
+  role            = aws_iam_role.metadata_lambda_role.arn
+  handler         = "bootstrap"
+  runtime         = "provided.al2023"
+  timeout          = 60
+  memory_size      = 512
+
+  source_code_hash = filebase64sha256("../lambda-metadata/main.zip")
+
+  environment {
+    variables = {
+      DYNAMODB_TABLE = aws_dynamodb_table.photo_metadata.name
+    }
+  }
+}
+
+# S3 event notification to trigger metadata extraction
+resource "aws_lambda_permission" "allow_s3" {
+  statement_id  = "AllowExecutionFromS3"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.metadata_extractor.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.photos.arn
+}
+
+resource "aws_s3_bucket_notification" "photo_upload" {
+  bucket = aws_s3_bucket.photos.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.metadata_extractor.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "uploads/"
+  }
+
+  depends_on = [aws_lambda_permission.allow_s3]
 }
 
 # Lambda Function URL
