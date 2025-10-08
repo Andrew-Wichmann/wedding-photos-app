@@ -15,6 +15,18 @@ resource "aws_s3_bucket" "photos" {
   bucket = "wedding-photos-${random_string.bucket_suffix.result}"
 }
 
+resource "aws_s3_bucket_cors_configuration" "photos" {
+  bucket = aws_s3_bucket.photos.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "PUT", "POST"]
+    allowed_origins = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3600
+  }
+}
+
 resource "random_string" "bucket_suffix" {
   length  = 8
   special = false
