@@ -73,6 +73,13 @@ resource "aws_iam_role_policy" "lambda_s3_policy" {
           "s3:DeleteObject"
         ]
         Resource = "${aws_s3_bucket.photos.arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = aws_s3_bucket.photos.arn
       }
     ]
   })

@@ -45,6 +45,10 @@ func handler(ctx context.Context, request events.LambdaFunctionURLRequest) (even
 		return handleUpload(request)
 	}
 
+	if method == "GET" && path == "/gallery" {
+		return handleGallery(request)
+	}
+
 	return events.LambdaFunctionURLResponse{
 		StatusCode: 404,
 		Headers:    map[string]string{"Content-Type": "application/json"},
@@ -121,6 +125,68 @@ func handleUpload(request events.LambdaFunctionURLRequest) (events.LambdaFunctio
 			"Content-Type":                 "application/json",
 			"Access-Control-Allow-Origin":  "*",
 			"Access-Control-Allow-Methods": "POST, OPTIONS",
+			"Access-Control-Allow-Headers": "Content-Type",
+		},
+		Body: string(responseBody),
+	}, nil
+}
+
+func handleGallery(request events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
+	// Initialize AWS session
+	sess := session.Must(session.NewSession())
+	s3Client := s3.New(sess)
+	bucketName := os.Getenv("S3_BUCKET")
+
+	// List all objects in the uploads folder
+	result, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+		Bucket: aws.String(bucketName),
+		Prefix: aws.String("uploads/"),
+	})
+
+	if err != nil {
+		return events.LambdaFunctionURLResponse{
+			StatusCode: 500,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error": "Failed to list files"}`,
+		}, nil
+	}
+
+	// Build list of file URLs
+	type GalleryItem struct {
+		Key          string `json:"key"`
+		URL          string `json:"url"`
+		LastModified string `json:"lastModified"`
+		Size         int64  `json:"size"`
+	}
+
+	var items []GalleryItem
+	for _, obj := range result.Contents {
+		// Generate pre-signed URL for viewing (valid for 1 hour)
+		req, _ := s3Client.GetObjectRequest(&s3.GetObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    obj.Key,
+		})
+		url, err := req.Presign(1 * time.Hour)
+		if err != nil {
+			continue
+		}
+
+		items = append(items, GalleryItem{
+			Key:          *obj.Key,
+			URL:          url,
+			LastModified: obj.LastModified.Format(time.RFC3339),
+			Size:         *obj.Size,
+		})
+	}
+
+	responseBody, _ := json.Marshal(items)
+
+	return events.LambdaFunctionURLResponse{
+		StatusCode: 200,
+		Headers: map[string]string{
+			"Content-Type":                 "application/json",
+			"Access-Control-Allow-Origin":  "*",
+			"Access-Control-Allow-Methods": "GET, OPTIONS",
 			"Access-Control-Allow-Headers": "Content-Type",
 		},
 		Body: string(responseBody),

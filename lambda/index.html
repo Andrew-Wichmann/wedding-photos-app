@@ -112,35 +112,83 @@
             object-fit: cover;
             border-radius: 15px;
         }
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #ddd;
+        }
+        .tab {
+            flex: 1;
+            padding: 15px;
+            background: #f5f5f5;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+        }
+        .tab:hover {
+            background: #e9e9e9;
+        }
+        .tab.active {
+            background: white;
+            border-bottom-color: #007bff;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Wedding Photo Upload</h1>
-        
-        <form class="upload-form" id="uploadForm">
-            <div class="file-input-wrapper">
-                <input type="file" id="photoInput" class="file-input-hidden" accept="image/*,video/*" multiple required>
-                <label for="photoInput" class="file-input">
-                    Click to select a photo or drag and drop
-                </label>
-            </div>
-            
-            <div class="swiper" id="photoSwiper" style="display: none;">
-                <div class="swiper-wrapper" id="swiperWrapper">
-                    <!-- Photos will be added here dynamically -->
+
+        <div class="tabs">
+            <button class="tab active" data-tab="upload">Upload</button>
+            <button class="tab" data-tab="browse">Browse</button>
+        </div>
+
+        <div class="tab-content active" id="uploadTab">
+            <form class="upload-form" id="uploadForm">
+                <div class="file-input-wrapper">
+                    <input type="file" id="photoInput" class="file-input-hidden" accept="image/*,video/*" multiple required>
+                    <label for="photoInput" class="file-input">
+                        Click to select a photo or drag and drop
+                    </label>
+                </div>
+
+                <div class="swiper" id="uploadSwiper" style="display: none;">
+                    <div class="swiper-wrapper" id="uploadSwiperWrapper">
+                        <!-- Photos will be added here dynamically -->
+                    </div>
+                    <div class="swiper-pagination"></div>
+                    <div class="swiper-button-next"></div>
+                    <div class="swiper-button-prev"></div>
+                </div>
+
+                <button type="submit" class="submit-btn" id="submitBtn">
+                    Upload Photo
+                </button>
+            </form>
+
+            <div id="status"></div>
+        </div>
+
+        <div class="tab-content" id="browseTab">
+            <div class="swiper" id="gallerySwiper">
+                <div class="swiper-wrapper" id="gallerySwiperWrapper">
+                    <!-- Gallery photos will be loaded here -->
                 </div>
                 <div class="swiper-pagination"></div>
                 <div class="swiper-button-next"></div>
                 <div class="swiper-button-prev"></div>
             </div>
-            
-            <button type="submit" class="submit-btn" id="submitBtn">
-                Upload Photo
-            </button>
-        </form>
-        
-        <div id="status"></div>
+        </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
@@ -149,63 +197,118 @@
         const uploadForm = document.getElementById('uploadForm');
         const submitBtn = document.getElementById('submitBtn');
         const status = document.getElementById('status');
-        const photoSwiper = document.getElementById('photoSwiper');
-        const swiperWrapper = document.getElementById('swiperWrapper');
-        
-        let swiper = null;
+        const uploadSwiper = document.getElementById('uploadSwiper');
+        const uploadSwiperWrapper = document.getElementById('uploadSwiperWrapper');
+        const gallerySwiper = document.getElementById('gallerySwiper');
+        const gallerySwiperWrapper = document.getElementById('gallerySwiperWrapper');
+
+        let uploadSwiperInstance = null;
+        let gallerySwiperInstance = null;
         let selectedFiles = [];
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                const targetTab = this.getAttribute('data-tab');
+
+                // Update tab buttons
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+
+                // Update tab content
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                document.getElementById(targetTab + 'Tab').classList.add('active');
+
+                // Load gallery when Browse tab is clicked
+                if (targetTab === 'browse' && gallerySwiperWrapper.children.length === 0) {
+                    loadGallery();
+                }
+            });
+        });
+
+        // Load gallery on page load
+        async function loadGallery() {
+            try {
+                const response = await fetch('/gallery');
+                if (!response.ok) return;
+
+                const items = await response.json();
+                if (items.length === 0) return;
+
+                // Clear and populate Swiper with gallery images
+                gallerySwiperWrapper.innerHTML = '';
+                items.forEach(item => {
+                    const slide = document.createElement('div');
+                    slide.className = 'swiper-slide';
+
+                    // Check if video based on file extension
+                    const isVideo = item.key.match(/\.(mp4|webm|mov)$/i);
+                    if (isVideo) {
+                        slide.innerHTML = `<video controls playsinline><source src="${item.url}" type="video/mp4"></video>`;
+                    } else {
+                        slide.innerHTML = `<img src="${item.url}" alt="${item.key}">`;
+                    }
+
+                    gallerySwiperWrapper.appendChild(slide);
+                });
+
+                initGallerySwiper();
+            } catch (error) {
+                console.error('Failed to load gallery:', error);
+            }
+        }
 
         photoInput.addEventListener('change', function(e) {
             const files = Array.from(e.target.files);
             selectedFiles = files;
-            
+
             if (files.length > 0) {
-                showSwiper(files);
+                showUploadPreview(files);
                 submitBtn.textContent = `Upload ${files.length} Photo${files.length > 1 ? 's' : ''}`;
             }
         });
 
-        function showSwiper(files) {
+        function showUploadPreview(files) {
             // Clear existing slides
-            swiperWrapper.innerHTML = '';
+            uploadSwiperWrapper.innerHTML = '';
             let loadedCount = 0;
-            
+
             // Add new slides
             files.forEach((file, index) => {
                 const reader = new FileReader();
                 reader.onload = function(e) {
                     const slide = document.createElement('div');
                     slide.className = 'swiper-slide';
-                    
+
                     // Check if file is video or image
                     if (file.type.startsWith('video/')) {
                         slide.innerHTML = `<video controls playsinline><source src="${e.target.result}" type="${file.type}"></video>`;
                     } else {
                         slide.innerHTML = `<img src="${e.target.result}" alt="Photo ${index + 1}">`;
                     }
-                    
-                    swiperWrapper.appendChild(slide);
-                    
+
+                    uploadSwiperWrapper.appendChild(slide);
+
                     loadedCount++;
                     // Initialize Swiper after all images load
                     if (loadedCount === files.length) {
-                        setTimeout(initSwiper, 100); // Small delay to ensure DOM is ready
+                        setTimeout(initUploadSwiper, 100); // Small delay to ensure DOM is ready
                     }
                 };
                 reader.readAsDataURL(file);
             });
-            
-            photoSwiper.style.display = 'block';
+
+            uploadSwiper.style.display = 'block';
         }
 
-        function initSwiper() {
-            if (swiper) {
-                swiper.destroy(true, true);
+        function initUploadSwiper() {
+            if (uploadSwiperInstance) {
+                uploadSwiperInstance.destroy(true, true);
             }
-            
-            console.log('Initializing Swiper with', swiperWrapper.children.length, 'slides');
-            
-            swiper = new Swiper('#photoSwiper', {
+
+            console.log('Initializing Upload Swiper with', uploadSwiperWrapper.children.length, 'slides');
+
+            uploadSwiperInstance = new Swiper('#uploadSwiper', {
                 effect: 'cards',
                 grabCursor: true,
                 centeredSlides: true,
@@ -216,24 +319,72 @@
                     slideShadows: true,
                 },
                 pagination: {
-                    el: '.swiper-pagination',
+                    el: '#uploadSwiper .swiper-pagination',
                     clickable: true,
                 },
                 navigation: {
-                    nextEl: '.swiper-button-next',
-                    prevEl: '.swiper-button-prev',
+                    nextEl: '#uploadSwiper .swiper-button-next',
+                    prevEl: '#uploadSwiper .swiper-button-prev',
                 },
                 on: {
                     init: function() {
-                        console.log('Swiper initialized');
+                        console.log('Upload Swiper initialized');
                     },
                     slideChange: function() {
                         // Pause all videos
-                        document.querySelectorAll('.swiper-slide video').forEach(video => {
+                        document.querySelectorAll('#uploadSwiper .swiper-slide video').forEach(video => {
                             video.pause();
                         });
-                        
-                        // Auto-play video on current slide using Swiper's active index
+
+                        // Auto-play video on current slide
+                        const activeSlide = this.slides[this.activeIndex];
+                        if (activeSlide) {
+                            const video = activeSlide.querySelector('video');
+                            if (video) {
+                                video.play().catch(e => console.log('Auto-play blocked:', e));
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function initGallerySwiper() {
+            if (gallerySwiperInstance) {
+                gallerySwiperInstance.destroy(true, true);
+            }
+
+            console.log('Initializing Gallery Swiper with', gallerySwiperWrapper.children.length, 'slides');
+
+            gallerySwiperInstance = new Swiper('#gallerySwiper', {
+                effect: 'cards',
+                grabCursor: true,
+                centeredSlides: true,
+                cardsEffect: {
+                    perSlideOffset: 8,
+                    perSlideRotate: 2,
+                    rotate: true,
+                    slideShadows: true,
+                },
+                pagination: {
+                    el: '#gallerySwiper .swiper-pagination',
+                    clickable: true,
+                },
+                navigation: {
+                    nextEl: '#gallerySwiper .swiper-button-next',
+                    prevEl: '#gallerySwiper .swiper-button-prev',
+                },
+                on: {
+                    init: function() {
+                        console.log('Gallery Swiper initialized');
+                    },
+                    slideChange: function() {
+                        // Pause all videos
+                        document.querySelectorAll('#gallerySwiper .swiper-slide video').forEach(video => {
+                            video.pause();
+                        });
+
+                        // Auto-play video on current slide
                         const activeSlide = this.slides[this.activeIndex];
                         if (activeSlide) {
                             const video = activeSlide.querySelector('video');
@@ -305,8 +456,12 @@
                 if (uploadedCount === selectedFiles.length) {
                     showStatus(`All ${uploadedCount} photos uploaded successfully!`, 'success');
                     uploadForm.reset();
-                    photoSwiper.style.display = 'none';
+                    uploadSwiper.style.display = 'none';
                     selectedFiles = [];
+                    // Reload gallery if it was already loaded
+                    if (gallerySwiperWrapper.children.length > 0) {
+                        loadGallery();
+                    }
                 } else {
                     showStatus(`Uploaded ${uploadedCount} of ${selectedFiles.length} photos.`, 'error');
                 }
