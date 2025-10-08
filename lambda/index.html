@@ -92,23 +92,25 @@
             border-radius: 5px;
         }
         .swiper {
-            width: 100%;
-            height: 300px;
-            margin: 20px 0;
+            width: 300px;
+            height: 400px;
+            margin: 20px auto;
         }
         .swiper-slide {
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 10px;
+            border-radius: 15px;
             background: #f0f0f0;
             overflow: hidden;
+            aspect-ratio: 3/4;
         }
-        .swiper-slide img {
+        .swiper-slide img,
+        .swiper-slide video {
             width: 100%;
             height: 100%;
             object-fit: cover;
-            border-radius: 10px;
+            border-radius: 15px;
         }
     </style>
 </head>
@@ -118,7 +120,7 @@
         
         <form class="upload-form" id="uploadForm">
             <div class="file-input-wrapper">
-                <input type="file" id="photoInput" class="file-input-hidden" accept="image/*" multiple required>
+                <input type="file" id="photoInput" class="file-input-hidden" accept="image/*,video/*" multiple required>
                 <label for="photoInput" class="file-input">
                     Click to select a photo or drag and drop
                 </label>
@@ -174,7 +176,14 @@
                 reader.onload = function(e) {
                     const slide = document.createElement('div');
                     slide.className = 'swiper-slide';
-                    slide.innerHTML = `<img src="${e.target.result}" alt="Photo ${index + 1}">`;
+                    
+                    // Check if file is video or image
+                    if (file.type.startsWith('video/')) {
+                        slide.innerHTML = `<video controls playsinline><source src="${e.target.result}" type="${file.type}"></video>`;
+                    } else {
+                        slide.innerHTML = `<img src="${e.target.result}" alt="Photo ${index + 1}">`;
+                    }
+                    
                     swiperWrapper.appendChild(slide);
                     
                     loadedCount++;
@@ -217,6 +226,21 @@
                 on: {
                     init: function() {
                         console.log('Swiper initialized');
+                    },
+                    slideChange: function() {
+                        // Pause all videos
+                        document.querySelectorAll('.swiper-slide video').forEach(video => {
+                            video.pause();
+                        });
+                        
+                        // Auto-play video on current slide using Swiper's active index
+                        const activeSlide = this.slides[this.activeIndex];
+                        if (activeSlide) {
+                            const video = activeSlide.querySelector('video');
+                            if (video) {
+                                video.play().catch(e => console.log('Auto-play blocked:', e));
+                            }
+                        }
                     }
                 }
             });
