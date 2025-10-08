@@ -220,7 +220,7 @@
                 document.getElementById(targetTab + 'Tab').classList.add('active');
 
                 // Load gallery when Browse tab is clicked
-                if (targetTab === 'browse' && gallerySwiperWrapper.children.length === 0) {
+                if (targetTab === 'browse' && !gallerySwiperInstance) {
                     loadGallery();
                 }
             });
@@ -235,24 +235,8 @@
                 const items = await response.json();
                 if (items.length === 0) return;
 
-                // Clear and populate Swiper with gallery images
-                gallerySwiperWrapper.innerHTML = '';
-                items.forEach(item => {
-                    const slide = document.createElement('div');
-                    slide.className = 'swiper-slide';
-
-                    // Check if video based on file extension
-                    const isVideo = item.key.match(/\.(mp4|webm|mov)$/i);
-                    if (isVideo) {
-                        slide.innerHTML = `<video controls playsinline><source src="${item.url}" type="video/mp4"></video>`;
-                    } else {
-                        slide.innerHTML = `<img src="${item.url}" alt="${item.key}">`;
-                    }
-
-                    gallerySwiperWrapper.appendChild(slide);
-                });
-
-                initGallerySwiper();
+                // Initialize gallery with virtual slides
+                initGallerySwiper(items);
             } catch (error) {
                 console.error('Failed to load gallery:', error);
             }
@@ -349,26 +333,43 @@
             });
         }
 
-        function initGallerySwiper() {
+        function initGallerySwiper(items) {
             if (gallerySwiperInstance) {
                 gallerySwiperInstance.destroy(true, true);
             }
 
-            console.log('Initializing Gallery Swiper with', gallerySwiperWrapper.children.length, 'slides');
+            console.log('Initializing Gallery Swiper with', items.length, 'virtual slides');
 
             gallerySwiperInstance = new Swiper('#gallerySwiper', {
-                effect: 'cards',
+                effect: 'fade',
+                fadeEffect: {
+                    crossFade: true
+                },
                 grabCursor: true,
-                centeredSlides: true,
-                cardsEffect: {
-                    perSlideOffset: 8,
-                    perSlideRotate: 2,
-                    rotate: true,
-                    slideShadows: true,
+                virtual: {
+                    enabled: true,
+                    slides: items,
+                    renderSlide: function(item, index) {
+                        const isVideo = item.key.match(/\.(mp4|webm|mov)$/i);
+                        if (isVideo) {
+                            return `<div class="swiper-slide" data-swiper-slide-index="${index}">
+                                <video controls playsinline loading="lazy">
+                                    <source src="${item.url}" type="video/mp4">
+                                </video>
+                            </div>`;
+                        } else {
+                            return `<div class="swiper-slide" data-swiper-slide-index="${index}">
+                                <img src="${item.url}" alt="${item.key}" loading="lazy">
+                            </div>`;
+                        }
+                    },
+                    addSlidesAfter: 2,
+                    addSlidesBefore: 2
                 },
                 pagination: {
                     el: '#gallerySwiper .swiper-pagination',
                     clickable: true,
+                    type: 'fraction'
                 },
                 navigation: {
                     nextEl: '#gallerySwiper .swiper-button-next',
@@ -378,13 +379,15 @@
                     init: function() {
                         console.log('Gallery Swiper initialized');
                     },
-                    slideChange: function() {
-                        // Pause all videos
-                        document.querySelectorAll('#gallerySwiper .swiper-slide video').forEach(video => {
+                    slideChangeTransitionStart: function() {
+                        // Pause all videos immediately when slide starts changing
+                        document.querySelectorAll('#gallerySwiper video').forEach(video => {
                             video.pause();
+                            video.currentTime = 0;
                         });
-
-                        // Auto-play video on current slide
+                    },
+                    slideChange: function() {
+                        // Auto-play video on current slide if it exists
                         const activeSlide = this.slides[this.activeIndex];
                         if (activeSlide) {
                             const video = activeSlide.querySelector('video');
@@ -459,7 +462,7 @@
                     uploadSwiper.style.display = 'none';
                     selectedFiles = [];
                     // Reload gallery if it was already loaded
-                    if (gallerySwiperWrapper.children.length > 0) {
+                    if (gallerySwiperInstance) {
                         loadGallery();
                     }
                 } else {
