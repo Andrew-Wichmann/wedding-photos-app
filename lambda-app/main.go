@@ -135,51 +135,181 @@ func handleUpload(request events.LambdaFunctionURLRequest) (events.LambdaFunctio
 }
 
 func handleGallery(request events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
-	// Initialize AWS session
+	// Initialize AWS sessions
 	sess := session.Must(session.NewSession())
 	s3Client := s3.New(sess)
+	dynamoClient := dynamodb.New(sess)
 	bucketName := os.Getenv("S3_BUCKET")
-
-	// List all objects in the uploads folder
-	result, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
-		Bucket: aws.String(bucketName),
-		Prefix: aws.String("uploads/"),
-	})
-
-	if err != nil {
-		return events.LambdaFunctionURLResponse{
-			StatusCode: 500,
-			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       `{"error": "Failed to list files"}`,
-		}, nil
+	tableName := os.Getenv("DYNAMODB_TABLE")
+	if tableName == "" {
+		tableName = "wedding-photo-metadata" // fallback
 	}
 
-	// Build list of file URLs
+	// Parse query parameters for filtering
+	queryParams := request.QueryStringParameters
+	faceID := queryParams["faceId"]
+	minFaces := queryParams["minFaces"]
+	startDate := queryParams["startDate"]
+	endDate := queryParams["endDate"]
+	device := queryParams["device"]
+
+	// Build list of photo keys that match filters
+	var filteredPhotoKeys []string
+
+	if faceID != "" || minFaces != "" || startDate != "" || endDate != "" || device != "" {
+		// If filters are provided, query DynamoDB first
+		scanInput := &dynamodb.ScanInput{
+			TableName: aws.String(tableName),
+		}
+
+		var filterExpressions []string
+		expressionAttributeValues := make(map[string]*dynamodb.AttributeValue)
+		expressionAttributeNames := make(map[string]*string)
+
+		// Filter by minimum face count
+		if minFaces != "" {
+			if count, err := strconv.Atoi(minFaces); err == nil {
+				filterExpressions = append(filterExpressions, "#faceCount >= :minFaces")
+				expressionAttributeNames["#faceCount"] = aws.String("faceCount")
+				expressionAttributeValues[":minFaces"] = &dynamodb.AttributeValue{N: aws.String(minFaces)}
+				_ = count
+			}
+		}
+
+		// Filter by date range
+		if startDate != "" {
+			filterExpressions = append(filterExpressions, "#dateTaken >= :startDate")
+			expressionAttributeNames["#dateTaken"] = aws.String("dateTaken")
+			expressionAttributeValues[":startDate"] = &dynamodb.AttributeValue{S: aws.String(startDate)}
+		}
+		if endDate != "" {
+			filterExpressions = append(filterExpressions, "#dateTaken <= :endDate")
+			expressionAttributeNames["#dateTaken"] = aws.String("dateTaken")
+			expressionAttributeValues[":endDate"] = &dynamodb.AttributeValue{S: aws.String(endDate)}
+		}
+
+		// Filter by device
+		if device != "" {
+			filterExpressions = append(filterExpressions, "contains(#model, :device)")
+			expressionAttributeNames["#model"] = aws.String("model")
+			expressionAttributeValues[":device"] = &dynamodb.AttributeValue{S: aws.String(device)}
+		}
+
+		// Apply filters if any exist
+		if len(filterExpressions) > 0 {
+			filterExpression := filterExpressions[0]
+			for i := 1; i < len(filterExpressions); i++ {
+				filterExpression += " AND " + filterExpressions[i]
+			}
+			scanInput.FilterExpression = aws.String(filterExpression)
+			scanInput.ExpressionAttributeValues = expressionAttributeValues
+			scanInput.ExpressionAttributeNames = expressionAttributeNames
+		}
+
+		// Execute scan
+		result, err := dynamoClient.Scan(scanInput)
+		if err != nil {
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error": "Failed to query metadata: %s"}`, err.Error()),
+			}, nil
+		}
+
+		// Unmarshal results
+		var metadata []map[string]interface{}
+		err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &metadata)
+		if err != nil {
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error": "Failed to parse metadata"}`,
+			}, nil
+		}
+
+		// Post-process filter by faceId (in-memory filtering)
+		if faceID != "" {
+			var filtered []map[string]interface{}
+			for _, item := range metadata {
+				if faces, ok := item["faces"].([]interface{}); ok {
+					for _, face := range faces {
+						if faceMap, ok := face.(map[string]interface{}); ok {
+							if id, ok := faceMap["faceId"].(string); ok && id == faceID {
+								filtered = append(filtered, item)
+								break
+							}
+						}
+					}
+				}
+			}
+			metadata = filtered
+		}
+
+		// Extract photo keys from filtered metadata
+		for _, item := range metadata {
+			if photoId, ok := item["photoId"].(string); ok {
+				filteredPhotoKeys = append(filteredPhotoKeys, photoId)
+			}
+		}
+	} else {
+		// No filters - list all objects from S3
+		result, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket: aws.String(bucketName),
+			Prefix: aws.String("uploads/"),
+		})
+
+		if err != nil {
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error": "Failed to list files"}`,
+			}, nil
+		}
+
+		for _, obj := range result.Contents {
+			filteredPhotoKeys = append(filteredPhotoKeys, *obj.Key)
+		}
+	}
+
+	// Build list of file URLs for filtered photos
 	type GalleryItem struct {
 		Key          string `json:"key"`
 		URL          string `json:"url"`
-		LastModified string `json:"lastModified"`
-		Size         int64  `json:"size"`
+		LastModified string `json:"lastModified,omitempty"`
+		Size         int64  `json:"size,omitempty"`
 	}
 
 	var items []GalleryItem
-	for _, obj := range result.Contents {
+	for _, key := range filteredPhotoKeys {
 		// Generate pre-signed URL for viewing (valid for 1 hour)
 		req, _ := s3Client.GetObjectRequest(&s3.GetObjectInput{
 			Bucket: aws.String(bucketName),
-			Key:    obj.Key,
+			Key:    aws.String(key),
 		})
 		url, err := req.Presign(1 * time.Hour)
 		if err != nil {
 			continue
 		}
 
-		items = append(items, GalleryItem{
-			Key:          *obj.Key,
-			URL:          url,
-			LastModified: obj.LastModified.Format(time.RFC3339),
-			Size:         *obj.Size,
+		// Try to get object info for size and last modified
+		objInfo, err := s3Client.HeadObject(&s3.HeadObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(key),
 		})
+
+		galleryItem := GalleryItem{
+			Key: key,
+			URL: url,
+		}
+
+		if err == nil {
+			galleryItem.LastModified = objInfo.LastModified.Format(time.RFC3339)
+			if objInfo.ContentLength != nil {
+				galleryItem.Size = *objInfo.ContentLength
+			}
+		}
+
+		items = append(items, galleryItem)
 	}
 
 	responseBody, _ := json.Marshal(items)
@@ -202,7 +332,10 @@ func handleGallery(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 func handleMetadata(request events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
 	sess := session.Must(session.NewSession())
 	dynamoClient := dynamodb.New(sess)
-	tableName := "wedding-photo-metadata"
+	tableName := os.Getenv("DYNAMODB_TABLE")
+	if tableName == "" {
+		tableName = "wedding-photo-metadata" // fallback
+	}
 
 	// Parse query parameters for filtering
 	queryParams := request.QueryStringParameters

@@ -139,7 +139,8 @@ resource "aws_lambda_function" "wedding_app" {
 
   environment {
     variables = {
-      S3_BUCKET = aws_s3_bucket.photos.bucket
+      S3_BUCKET      = aws_s3_bucket.photos.bucket
+      DYNAMODB_TABLE = aws_dynamodb_table.photo_metadata.name
     }
   }
 }
