@@ -5,6 +5,15 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  # Uncomment after running: make setup-backend
+  backend "s3" {
+    bucket         = "wedding-app-terraform-state"
+    key            = "wedding-app/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-state-locks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
